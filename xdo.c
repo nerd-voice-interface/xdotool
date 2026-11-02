@@ -7,7 +7,8 @@
  */
 
 #ifndef _XOPEN_SOURCE
-#define _XOPEN_SOURCE 600
+#define _XOPEN_SOURCE 700
+#define _DEFAULT_SOURCE 1
 #endif /* _XOPEN_SOURCE */
 
 #include <sys/select.h>
@@ -993,13 +994,24 @@ int xdo_enter_text_window(const xdo_t *xdo, Window window, const char *string, u
   }
 
   charcodemap_t key;
-  setlocale(LC_CTYPE,"");
+  /* A library must not change its host application's global locale. */
+  locale_t locale = newlocale(LC_CTYPE_MASK, "", (locale_t)0);
+  if (locale == (locale_t)0) {
+    return XDO_ERROR;
+  }
+  locale_t previous_locale = uselocale(locale);
+  if (previous_locale == (locale_t)0) {
+    freelocale(locale);
+    return XDO_ERROR;
+  }
+  int result = XDO_SUCCESS;
   mbstate_t ps = { 0 };
   ssize_t len;
   while ( (len = mbsrtowcs(&key.key, &string, 1, &ps)) ) {
     if (len == -1) {
       fprintf(stderr, "Invalid multi-byte sequence encountered\n");
-      return XDO_ERROR;
+      result = XDO_ERROR;
+      break;
     }
     _xdo_charcodemap_from_char(xdo, &key);
     if (key.code == 0 && key.symbol == NoSymbol) {
@@ -1015,7 +1027,9 @@ int xdo_enter_text_window(const xdo_t *xdo, Window window, const char *string, u
     xdo_send_keysequence_window_list_do(xdo, window, &key, 1, False, NULL, up_delay);
   }
 
-  return XDO_SUCCESS;
+  uselocale(previous_locale);
+  freelocale(locale);
+  return result;
 }
 
 int _xdo_send_keysequence_window_do(const xdo_t *xdo, Window window, const char *keyseq,
@@ -1370,11 +1384,15 @@ static void _xdo_populate_charcode_map(xdo_t *xdo) {
 
         if (keysym == NoSymbol) {
           // No keysym produced by the given (keycode, group, shift level)
-          _xdo_debug(
-              xdo, "[group %d, level %s[%d]] (KT: %s) keycode %d is not bound at this level",
-              group, XGetAtomName(dpy, key_type->level_names[li]),
-              li + 1 /* levels are named starting at 1 */,
-              XGetAtomName(dpy, key_type->name), keycode);
+          if (xdo->debug) {
+            char *level_name = XGetAtomName(dpy, key_type->level_names[li]);
+            char *type_name = XGetAtomName(dpy, key_type->name);
+            _xdo_debug(
+                xdo, "[group %d, level %s[%d]] (KT: %s) keycode %d is not bound at this level",
+                group, level_name, li + 1, type_name, keycode);
+            XFree(level_name);
+            XFree(type_name);
+          }
           continue;
         }
 
@@ -1432,12 +1450,14 @@ static void _xdo_populate_charcode_map(xdo_t *xdo) {
             continue;
         }
 
-        _xdo_debug(
+        if (xdo->debug) {
+          char *level_name = XGetAtomName(dpy, key_type->level_names[li]);
+          _xdo_debug(
           xdo,
           "[group %d, level %s[%d]] Symbol(%s) = keycode %d with "
           "mask:%s, "
           "real_mods:%x, vmods:%s%s",
-          group, XGetAtomName(dpy, key_type->level_names[li]),
+          group, level_name,
           li + 1 /* levels are named starting at 1 */,
           XKeysymToString(keysym), keycode,
           modnames(map.mods.mask), map.mods.real_mods,
@@ -1450,6 +1470,8 @@ static void _xdo_populate_charcode_map(xdo_t *xdo) {
           // If no active mapping was found for level 1 (li == 0), the keycode alone
           // shall be valid.
           (!map.active && li == 0) ? " [IMPLICIT] " : "");
+          XFree(level_name);
+        }
 
         unsigned char mask = map.mods.mask | _xdo_query_keycode_to_modifier(modmap, keycode);
         AddCharcodeEntry(idx, xdo, keysym, keycode, group, mask);
@@ -1457,6 +1479,7 @@ static void _xdo_populate_charcode_map(xdo_t *xdo) {
     }
   }
 
+  XFreeModifiermap(modmap);
   XkbFreeKeyboard(desc, 0, True);
 }
 
@@ -2155,13 +2178,14 @@ static const char *vmodnames(Display *dpy, XkbDescPtr desc, short vmods) {
 
   for (int i = 0; (1 << i) <= vmods; i++) {
     if (vmods & (1 << i)) {
-      const char *n = XGetAtomName(dpy, desc->names->vmods[i]);
+      char *n = XGetAtomName(dpy, desc->names->vmods[i]);
       if (names[0] == 0) {
         strncpy(names, n, 20);
       } else {
         strncpy(names+strlen(names), "+", 20);
         strncpy(names+strlen(names), n,20);
       }
+      XFree(n);
     }
   }
 

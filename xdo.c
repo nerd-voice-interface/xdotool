@@ -1401,8 +1401,8 @@ static void _xdo_populate_charcode_map(xdo_t *xdo) {
          */
         if (li == 0) {
           KeySym key_without_mask;
-          // Ask what keysym is produced by this keycode when mask == 0.
-          if (XkbTranslateKeyCode(desc, keycode, 0 /* modifier mask */, NULL, &key_without_mask) == True) {
+          // Translate without modifiers in the group currently being scanned.
+          if (XkbTranslateKeyCode(desc, keycode, XkbBuildCoreState(0, group), NULL, &key_without_mask) == True) {
             // Safety check: does the keysym found above match the keysm produced by this shift level?
             if (key_without_mask == keysym) {
               // pretend we found the map entry in the XkbKTMap
